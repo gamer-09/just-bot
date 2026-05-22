@@ -8,6 +8,13 @@ const path = require("path");
 const http = require("http");
 require("dotenv").config();
 
+// ─── Startup Validation ───────────────────────────────────────────────────────
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN ?? process.env.DISCORD_BOT_TOKEN;
+if (!DISCORD_TOKEN) {
+  console.error("❌ FATAL: DISCORD_TOKEN environment variable is not set. Add it in Railway → Variables.");
+  process.exit(1);
+}
+
 // ─── Health Check Server ──────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 const server = http.createServer((req, res) => {
@@ -729,7 +736,7 @@ async function cmdResurrect(ctx) {
   saveData();
   return ctx.reply({ embeds: [dark("#4B0082")
     .setTitle("💜 The Resurrection Trial Begins")
-    .setDescription("*Death does not release without cost.*\n\n**${char.name}** must prove their worth to the realm once more.\n\nComplete *The Shadow Catacombs* in **5 minutes** and return with `/quest return`.\n\n*(Or purchase the **Resurrection Stone** from `/shop` for an immediate return.)*")
+    .setDescription(`*Death does not release without cost.*\n\n**${char.name}** must prove their worth to the realm once more.\n\nComplete *The Shadow Catacombs* in **5 minutes** and return with \`/quest return\`.\n\n*(Or purchase the **Resurrection Stone** from \`/shop\` for an immediate return.)*`)
     .setFooter({ text: "Death remembers thee. Earn thy way back." })] });
 }
 
@@ -832,7 +839,7 @@ const SLASH_COMMANDS = [
 ].map(c => c.toJSON());
 
 async function registerSlashCommands() {
-  const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN ?? process.env.DISCORD_BOT_TOKEN);
+  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
   const guildId = process.env.DISCORD_GUILD_ID;
   try {
     if (guildId) {
@@ -946,4 +953,4 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-client.login(process.env.DISCORD_TOKEN ?? process.env.DISCORD_BOT_TOKEN);
+client.login(DISCORD_TOKEN);
