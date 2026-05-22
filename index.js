@@ -733,6 +733,34 @@ async function cmdResurrect(ctx) {
     .setFooter({ text: "Death remembers thee. Earn thy way back." })] });
 }
 
+async function cmdDeleteCharacter(ctx, confirm) {
+  const uid  = ctx.userId;
+  const char = db.users[uid];
+  if (!char) return ctx.reply({ embeds: [dark().setTitle("📜 No Soul Record Found").setDescription("Thou hast no character to erase from the chronicle.")] });
+  if ((confirm ?? "").toUpperCase() !== "CONFIRM") {
+    return ctx.reply({ embeds: [dark("#ED4245")
+      .setTitle("⚠️ Deletion Requires Confirmation")
+      .setDescription(
+        `This will **permanently erase ${char.name}** — all progress, levels, items, coins, and faction ties will be lost forever.\n\n` +
+        `To confirm, use:\n\`/deletecharacter confirm:CONFIRM\`\n*(prefix: \`!deletecharacter CONFIRM\`)*`
+      )] });
+  }
+  // Remove from faction
+  if (char.faction && db.factions[char.faction]) {
+    const f = db.factions[char.faction];
+    f.members = f.members.filter(id => id !== uid);
+    if (f.leaderId === uid && f.members.length > 0) f.leaderId = f.members[0];
+    else if (f.members.length === 0) delete db.factions[char.faction];
+  }
+  const name = char.name;
+  delete db.users[uid];
+  db.world.lore.push({ text: `**${name}** has been erased from the chronicle. Their deeds fade like smoke.`, timestamp: Date.now() });
+  saveData();
+  return ctx.reply({ embeds: [dark("#8B0000")
+    .setTitle("🗑️ Soul Erased from the Chronicle")
+    .setDescription(`*The scribes draw a line through the name **${name}**. The realm forgets.*\n\nThy record has been permanently deleted. Use \`/create\` to begin anew.`)] });
+}
+
 async function cmdSetChannel(ctx, channelId) {
   const member = ctx.guild?.members.cache.get(ctx.userId);
   if (!member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
@@ -801,6 +829,8 @@ const SLASH_COMMANDS = [
   new SlashCommandBuilder().setName("lore").setDescription("Read the last ten entries in the World Chronicle"),
   new SlashCommandBuilder().setName("leaderboard").setDescription("View the most powerful souls recorded in the Eternal Ledger"),
   new SlashCommandBuilder().setName("resurrect").setDescription("Begin thine resurrection trial after death"),
+  new SlashCommandBuilder().setName("deletecharacter").setDescription("Permanently erase thy character from the chronicle (irreversible)")
+    .addStringOption(o => o.setName("confirm").setDescription("Type CONFIRM to permanently delete thy character").setRequired(false)),
   new SlashCommandBuilder().setName("help").setDescription("Open the Compendium of Commands"),
 
   new SlashCommandBuilder().setName("quest").setDescription("Walk the dark questing roads of the realm")
@@ -907,9 +937,10 @@ client.on("messageCreate", async (message) => {
       case "shop":        await cmdShop(ctx, args[0]?.toLowerCase(), args[1]); break;
       case "lore":        await cmdLore(ctx); break;
       case "leaderboard": await cmdLeaderboard(ctx); break;
-      case "resurrect":   await cmdResurrect(ctx); break;
-      case "setchannel":  await cmdSetChannel(ctx, message.mentions.channels.first()?.id); break;
-      case "help":        await cmdHelp(ctx); break;
+      case "resurrect":        await cmdResurrect(ctx); break;
+      case "deletecharacter":  await cmdDeleteCharacter(ctx, args[0]); break;
+      case "setchannel":       await cmdSetChannel(ctx, message.mentions.channels.first()?.id); break;
+      case "help":             await cmdHelp(ctx); break;
     }
   } catch (err) {
     console.error(`[prefix:${command}]`, err);
@@ -935,9 +966,10 @@ client.on("interactionCreate", async (interaction) => {
       case "shop":        await cmdShop(ctx, interaction.options.getString("action"), interaction.options.getString("item_id")); break;
       case "lore":        await cmdLore(ctx); break;
       case "leaderboard": await cmdLeaderboard(ctx); break;
-      case "resurrect":   await cmdResurrect(ctx); break;
-      case "setchannel":  await cmdSetChannel(ctx, interaction.options.getChannel("channel")?.id); break;
-      case "help":        await cmdHelp(ctx); break;
+      case "resurrect":        await cmdResurrect(ctx); break;
+      case "deletecharacter":  await cmdDeleteCharacter(ctx, interaction.options.getString("confirm")); break;
+      case "setchannel":       await cmdSetChannel(ctx, interaction.options.getChannel("channel")?.id); break;
+      case "help":             await cmdHelp(ctx); break;
     }
   } catch (err) {
     console.error(`[slash:${interaction.commandName}]`, err);
