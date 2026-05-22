@@ -863,17 +863,11 @@ const SLASH_COMMANDS = [
 
 async function registerSlashCommands() {
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN ?? process.env.DISCORD_BOT_TOKEN);
-  const guildId = process.env.DISCORD_GUILD_ID;
   try {
-    if (guildId) {
-      for (const guild of client.guilds.cache.values()) {
-        await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: SLASH_COMMANDS });
-      }
-      console.log("✅ Guild slash commands registered");
-    } else {
-      await rest.put(Routes.applicationCommands(client.user.id), { body: SLASH_COMMANDS });
-      console.log("✅ Global slash commands registered");
+    for (const guild of client.guilds.cache.values()) {
+      await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: SLASH_COMMANDS });
     }
+    console.log(`✅ Slash commands registered to ${client.guilds.cache.size} guild(s) — active immediately`);
   } catch (err) {
     console.error("Slash registration error:", err.message);
   }
