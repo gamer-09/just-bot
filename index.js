@@ -863,16 +863,21 @@ const SLASH_COMMANDS = [
 
 async function registerSlashCommands() {
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN ?? process.env.DISCORD_BOT_TOKEN);
-  try {
-    // Clear any old global commands so there are no duplicates
-    await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
-    // Register per-guild so changes are active immediately
-    for (const guild of client.guilds.cache.values()) {
+  // Register guild commands FIRST so commands are always live
+  for (const guild of client.guilds.cache.values()) {
+    try {
       await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: SLASH_COMMANDS });
+      console.log(`✅ Slash commands registered to guild ${guild.id}`);
+    } catch (err) {
+      console.error(`Slash registration error for guild ${guild.id}:`, err.message);
     }
-    console.log(`✅ Slash commands registered to ${client.guilds.cache.size} guild(s) — active immediately`);
+  }
+  // Then wipe global commands to remove any old duplicates
+  try {
+    await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
+    console.log("✅ Global commands cleared");
   } catch (err) {
-    console.error("Slash registration error:", err.message);
+    console.error("Failed to clear global commands:", err.message);
   }
 }
 
