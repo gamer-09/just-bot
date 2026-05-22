@@ -8,13 +8,6 @@ const path = require("path");
 const http = require("http");
 require("dotenv").config();
 
-// ─── Startup Validation ───────────────────────────────────────────────────────
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN ?? process.env.DISCORD_BOT_TOKEN;
-if (!DISCORD_TOKEN) {
-  console.error("❌ FATAL: DISCORD_TOKEN environment variable is not set. Add it in Railway → Variables.");
-  process.exit(1);
-}
-
 // ─── Health Check Server ──────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 const server = http.createServer((req, res) => {
@@ -294,12 +287,26 @@ async function checkAchievements(char, guild) {
 }
 
 // ─── Context Adapter ─────────────────────────────────────────────────────────
+// Normalises message vs interaction into a single ctx object
+function msgCtx(message) {
+  return {
+    userId:  message.author.id,
+    guild:   message.guild,
+    ephemeral: false,
+    getUser(optionName) { return message.mentions.users.first() ?? null; },
+    getString(name) { return null; }, // not used for prefix commands
+    reply(opts) {
+      if (typeof opts === "string") return message.reply(opts);
+      return message.reply(opts);
+    },
+  };
+}
+
 function slashCtx(interaction) {
   return {
     userId:  interaction.user.id,
     guild:   interaction.guild,
     ephemeral: true,
-    memberPermissions: interaction.memberPermissions,
     getUser(optionName) { return interaction.options.getUser(optionName) ?? null; },
     getString(name) { return interaction.options.getString(name) ?? null; },
     async reply(opts) {
@@ -308,6 +315,66 @@ function slashCtx(interaction) {
       return interaction.reply(payload);
     },
   };
+}
+
+// ─── Character Creation Flow (prefix only) ───────────────────────────────────
+const PENDING = new Map();
+
+async function handleCreate(ctx) {
+  const uid = ctx.userId;
+  if (db.users[uid]) {
+    return ctx.reply({ embeds: [dark(RACES[db.users[uid].race].color)
+      .setTitle("📖 Thine Soul Is Already Recorded")
+      .setDescription("Thou art already inscribed in the Eternal Ledger. Use `/profile` to behold thy record.")] });
+  }
+  if (ctx.ephemeral) {
+    // Slash command — require options (handled in interactionCreate directly)
+    return ctx.reply({ embeds: [dark().setTitle("⚠️ Use `/create name: race: class:`").setDescription("When using slash commands, provide all three options at once.")] });
+  }
+  PENDING.set(uid, { step: "name" });
+  return ctx.reply({ embeds: [dark("#1a0a1e")
+    .setTitle("🌌 The Veil Parts — Thou Art Summoned")
+    .setDescription(
+      "*Another world breathes its first breath upon thee. The chronicle awaits thy name.*\n\n" +
+      "**Step I of III — What art thou called?**\n*Reply with thy character's name (2–32 letters).*"
+    )] });
+}
+
+async function handleCreationFlow(message, state) {
+  const uid = message.author.id;
+  const val = message.content.trim();
+
+  if (state.step === "name") {
+    if (val.length < 2 || val.length > 32) return message.reply("❌ *The scribes require a name of 2 to 32 letters. Try again.*");
+    state.name = val; state.step = "race"; PENDING.set(uid, state);
+    const list = Object.entries(RACES).map(([k, r]) =>
+      `${r.emoji} \`${k}\` **${r.name}** — Strike ${r.atk} · Ward ${r.def} · Arcane ${r.int} · Speed ${r.spd} · HP ${r.hp}\n*${r.lore}*`
+    ).join("\n\n");
+    return message.reply({ embeds: [dark("#1a0a1e").setTitle("🧬 Step II of III — Declare Thy Bloodline").setDescription(`*From what dark lineage dost thou hail?*\n\nReply with the bloodline key.\n\n${list}`)] });
+  }
+
+  if (state.step === "race") {
+    const key = val.toLowerCase().replace(/\s+/g, "_");
+    if (!RACES[key]) return message.reply(`❌ *The scribes do not recognise that bloodline. Choose from:* \`${Object.keys(RACES).join("`, `")}\``);
+    state.race = key; state.step = "class"; PENDING.set(uid, state);
+    const list = Object.entries(CLASSES).map(([k, c]) =>
+      `${c.emoji} \`${k}\` **${c.name}** — Strike +${c.atk} · Ward +${c.def} · Arcane +${c.int} · Speed +${c.spd} · HP ${c.hp >= 0 ? "+" : ""}${c.hp} · Crit ${Math.round(c.crit * 100)}%\n*${c.lore}*`
+    ).join("\n\n");
+    return message.reply({ embeds: [dark(RACES[key].color).setTitle("⚔️ Step III of III — Choose Thy Dark Path").setDescription(`*What manner of destruction dost thou bring to this world?*\n\nReply with the path key.\n\n${list}`)] });
+  }
+
+  if (state.step === "class") {
+    const key = val.toLowerCase();
+    if (!CLASSES[key]) return message.reply(`❌ *That path is not written in this world. Choose from:* \`${Object.keys(CLASSES).join("`, `")}\``);
+    const char = createCharacter(uid, state.name, state.race, key);
+    db.users[uid] = char; PENDING.delete(uid);
+    db.world.lore.push({ text: `**${state.name}** the ${RACES[state.race].name} ${CLASSES[key].name} crossed the veil and entered this world.`, timestamp: Date.now() });
+    saveData();
+    await checkAchievements(char, message.guild);
+    return message.reply({ embeds: [profileEmbed(char)
+      .setTitle(`${RACES[state.race].emoji} ${state.name} Enters the World`)
+      .setDescription(`*The veil closes behind thee. There is no going back.*\n\nThou begin with **100 Void Crystals 🔷**.\nSpeak \`!quest\` to embark on thy first venture into the dark.`)] });
+  }
 }
 
 async function createViaSlash(interaction) {
@@ -662,12 +729,13 @@ async function cmdResurrect(ctx) {
   saveData();
   return ctx.reply({ embeds: [dark("#4B0082")
     .setTitle("💜 The Resurrection Trial Begins")
-    .setDescription(`*Death does not release without cost.*\n\n**${char.name}** must prove their worth to the realm once more.\n\nComplete *The Shadow Catacombs* in **5 minutes** and return with \`/quest return\`.\n\n*(Or purchase the **Resurrection Stone** from \`/shop\` for an immediate return.)*`)
+    .setDescription("*Death does not release without cost.*\n\n**${char.name}** must prove their worth to the realm once more.\n\nComplete *The Shadow Catacombs* in **5 minutes** and return with `/quest return`.\n\n*(Or purchase the **Resurrection Stone** from `/shop` for an immediate return.)*")
     .setFooter({ text: "Death remembers thee. Earn thy way back." })] });
 }
 
 async function cmdSetChannel(ctx, channelId) {
-  if (!ctx.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+  const member = ctx.guild?.members.cache.get(ctx.userId);
+  if (!member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
     return ctx.reply({ embeds: [dark("#ED4245").setTitle("⚔️ Thine Authority Is Insufficient").setDescription("Only those with **Manage Server** authority may bind the chronicle to a channel.")] });
   }
   db.config.leaderboardChannelId = channelId;
@@ -764,7 +832,7 @@ const SLASH_COMMANDS = [
 ].map(c => c.toJSON());
 
 async function registerSlashCommands() {
-  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+  const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN ?? process.env.DISCORD_BOT_TOKEN);
   const guildId = process.env.DISCORD_GUILD_ID;
   try {
     if (guildId) {
@@ -782,18 +850,16 @@ async function registerSlashCommands() {
 }
 
 // ─── Client ───────────────────────────────────────────────────────────────────
-process.on("unhandledRejection", (err) => {
-  console.error("[unhandledRejection]", err);
-});
-process.on("uncaughtException", (err) => {
-  console.error("[uncaughtException]", err);
-});
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.MessageContent,
   ],
 });
+
+const PREFIX = process.env.PREFIX ?? "!";
 
 client.once("ready", async () => {
   console.log(`✅ Isekai Chronicles awoken as ${client.user.tag}`);
@@ -801,6 +867,54 @@ client.once("ready", async () => {
   checkDailyEvent();
   setInterval(checkDailyEvent, 60 * 60 * 1000);
   await registerSlashCommands();
+});
+
+// ─── Prefix Commands ──────────────────────────────────────────────────────────
+client.on("messageCreate", async (message) => {
+  if (message.author.bot || message.channel.isDMBased()) return;
+  const uid = message.author.id;
+
+  if (PENDING.has(uid) && !message.content.startsWith(PREFIX)) {
+    await handleCreationFlow(message, PENDING.get(uid)).catch(console.error);
+    return;
+  }
+
+  if (db.users[uid]?.status === "alive") {
+    const now = Date.now();
+    if (!db.users[uid].lastActive || (now - db.users[uid].lastActive) > 60000) {
+      db.users[uid].lastActive = now;
+      giveXP(db.users[uid], 3);
+      await checkAchievements(db.users[uid], message.guild);
+      saveData();
+    }
+  }
+
+  if (!message.content.startsWith(PREFIX)) return;
+  const args    = message.content.slice(PREFIX.length).trim().split(/\s+/);
+  const command = args.shift()?.toLowerCase();
+  const ctx     = msgCtx(message);
+
+  try {
+    switch (command) {
+      case "create":      await handleCreate(ctx); break;
+      case "profile":     await cmdProfile(ctx, message.mentions.users.first()?.id); break;
+      case "world":       await cmdWorld(ctx); break;
+      case "event":       await cmdEvent(ctx); break;
+      case "daily":       await cmdDaily(ctx); break;
+      case "quest":       await cmdQuest(ctx, args[0]?.toLowerCase(), args[1]); break;
+      case "faction":     await cmdFaction(ctx, args[0]?.toLowerCase(), args.slice(1).join(" ").trim()); break;
+      case "attack":      await cmdAttack(ctx, message.mentions.users.first()?.id); break;
+      case "shop":        await cmdShop(ctx, args[0]?.toLowerCase(), args[1]); break;
+      case "lore":        await cmdLore(ctx); break;
+      case "leaderboard": await cmdLeaderboard(ctx); break;
+      case "resurrect":   await cmdResurrect(ctx); break;
+      case "setchannel":  await cmdSetChannel(ctx, message.mentions.channels.first()?.id); break;
+      case "help":        await cmdHelp(ctx); break;
+    }
+  } catch (err) {
+    console.error(`[prefix:${command}]`, err);
+    message.reply("⚠️ *The void glitches. Something went wrong.*").catch(() => null);
+  }
 });
 
 // ─── Slash Commands ───────────────────────────────────────────────────────────
@@ -832,4 +946,4 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-client.login(DISCORD_TOKEN);
+client.login(process.env.DISCORD_TOKEN ?? process.env.DISCORD_BOT_TOKEN);
