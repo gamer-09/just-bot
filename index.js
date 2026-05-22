@@ -864,6 +864,9 @@ const SLASH_COMMANDS = [
 async function registerSlashCommands() {
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN ?? process.env.DISCORD_BOT_TOKEN);
   try {
+    // Clear any old global commands so there are no duplicates
+    await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
+    // Register per-guild so changes are active immediately
     for (const guild of client.guilds.cache.values()) {
       await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: SLASH_COMMANDS });
     }
